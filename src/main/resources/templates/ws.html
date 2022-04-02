@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Spring Boot+WebSocket+广播式</title>
+
+</head>
+<body onload="disconnect()">
+<noscript><h2 style="color: #ff0000">貌似你的浏览器不支持websocket</h2></noscript>
+<div>
+    <div>
+        <input id="target" type="text" class="layui-input" size="40" style="width: 350px" value="/topic-websocket"/>
+    </div>
+    <div class="login-main">
+        <header class="layui-elip">检查登录</header>
+
+        <div class="layadmin-user-login-box layadmin-user-login-body layui-form">
+            <div class="layui-form-item">
+                <label class="layadmin-user-login-icon layui-icon layui-icon-username" for="userId"></label>
+                <input type="text" name="userId" id="userId" placeholder="用户id" class="layui-input">
+            </div>
+            <div class="layui-form-item">
+                <label class="layadmin-user-login-icon layui-icon layui-icon-password" for="userName"></label>
+                <input type="text" name="userName" id="userName" placeholder="用户名" class="layui-input">
+            </div>
+            <div class="layui-form-item">
+                <label class="layadmin-user-login-icon layui-icon layui-icon-password" for="orgCode"></label>
+                <input type="text" name="orgCode" id="orgCode" placeholder="机构代码" class="layui-input">
+            </div>
+
+
+            <div class="layui-form-item">
+                <button class="layui-btn layui-btn-fluid" onclick="check()">检 查</button>
+            </div>
+        </div>
+
+
+    </div>
+    <div>
+        <button id="connect" onclick="connect();">连接</button>
+        <button id="disconnect" disabled="disabled" onclick="disconnect();">断开连接</button>
+    </div>
+    <div class="message">
+        <input id="receiver" type="text" class="layui-input" size="40" style="width: 350px" placeholder="接收者id"
+               value=""/>
+        <input id="message" type="text" class="layui-input" size="40" style="width: 350px" placeholder="消息内容" value=""/>
+    </div>
+    <div>
+        <button id="echo" class="layui-btn layui-btn-normal layui-btn-disabled"
+                onclick="sendMessage();">Send Message
+        </button>
+    </div>
+    <div id="conversationDiv">
+        <label>收到以下内容: </label>
+        <p id="response"></p>
+    </div>
+</div>
+<script th:src="@{sockjs.min.js}"></script>
+<script th:src="@{stomp.min.js}"></script>
+<script th:src="@{jquery.js}"></script>
+<script type="text/javascript">
+    var stompClient = null;
+
+    $(function () {
+        var target = $("#target");
+        if (window.location.protocol === 'http:') {
+            target.val('http://' + window.location.host + target.val());
+        } else {
+            target.val('https://' + window.location.host + target.val());
+        }
+    });
+
+    function setConnected(connected) {
+        document.getElementById('connect').disabled = connected;
+        document.getElementById('disconnect').disabled = !connected;
+        document.getElementById('conversationDiv').style.visibility = connected ? 'visible' : 'hidden';
+        $('#response').html();
+    }
+
+    function check() {
+        //获取用户名、密码
+        var userId = $("#userId").val();
+        var userName = $("#userName").val();
+        var orgCode = $("#orgCode").val();
+
+        var str = {
+            "userId": userId,
+            "userName": userName,
+            "orgCode": orgCode
+        };
+
+        $.ajax({
+            url: "/check",
+            type: "POST",
+            // headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            contentType: "application/json;charset=UTF-8",
+            // contentType: "application/json",
+            // dataType: "json",
+            async: false,
+            data:JSON.stringify(str),
+            // data: {
+            //     "userId": userId,
+            //     "userName": userName,
+            //     "orgCode": orgCode
+            // },
+            success: function (data) {
+            }
+        });
+    }
+
+
+    function connect() {
+        // var socket = new SockJS('/message-websocket'); //链接SockJS 的endpoint 名称为"/endpointWisely"
+
+        var target = $("#target").val();
+        var userId =  $("#userId").val();
+        var orgCode = $("#orgCode").val();
+        var ws = new SockJS(target);
+        stompClient = Stomp.over(ws);//使用stomp子协议的WebSocket 客户端
+        stompClient.connect({userId:userId,orgCode:orgCode}, function (frame) {//链接Web Socket的服务端。
+            setConnected(true);
+            console.log('Connected: ' + frame);
+            //订阅/topic/shipAlarm/orgCode 用于服务器向用户分组发送消息。
+            stompClient.subscribe('/topic/shipAlarm/' + orgCode, function (respnose) {
+                // showResponse(JSON.parse(respnose.body));
+                showResponse(respnose.body);
+            });
+            //订阅/topic/shipAlarm 用于服务器向所有用户发送消息。
+            stompClient.subscribe('/topic/shipAlarm' , function (respnose) {
+                // showResponse(JSON.parse(respnose.body));
+                showResponse(respnose.body);
+            });
+            //订阅该路径 用于向单个用户发送消息
+            stompClient.subscribe('/user/topic/shipAlarm', function (respnose) {
+                // showResponse(JSON.parse(respnose.body));
+                showResponse(respnose.body);
+            });
+            //上线时向服务器发送请求，查看是否有未读信息，若有，服务器会通过订阅路径 /user/topic/shipAlarm 进行返回。
+            stompClient.send("/app/pullUnreadMessage",
+                {},
+                JSON.stringify({
+                    userId: $("#userId").val(),
+                    orgCode: $("#orgCode").val(),
+                    userName: $("#userName").val(),
+                    destination: '/topic/shipAlarm'
+                })
+            )
+        });
+    }
+
+    //向指定用户发送消息
+    function sendMessage() {
+        if (stompClient != null) {
+            var receiver = $("#receiver").val();
+            var msg = $("#message").val();
+
+            $.ajax({
+                url: "/wsTemplate/sendToUser",
+                type: "POST",
+                dataType: "json",
+                async: true,
+                data: {
+                    "userId": $("#userId").val(),
+                    "orgCode": $("#orgCode").val(),
+                    "receiver": receiver,
+                    "msg": msg
+                },
+                success: function (data) {
+
+                }
+            });
+        } else {
+            layer.msg('STOMP connection not established, please connect.', {
+                offset: 'auto'
+                , icon: 2
+            });
+        }
+    }
+
+    function disconnect() {
+        if (stompClient != null) {
+            stompClient.disconnect();
+        }
+        setConnected(false);
+        console.log("Disconnected");
+    }
+
+    function showResponse(message) {
+        var response = $("#response");
+        response.html(message);
+    }
+</script>
+</body>
+</html>
